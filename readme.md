@@ -14,8 +14,11 @@
   - [Why is this necessary?](#why-is-this-necessary)
 - [Usage](#usage)
   - [Setup Env Vars](#setup-env-vars)
+    - [Option 1: Using OpenAI (Default)](#option-1-using-openai-default)
+    - [Option 2: Using Ollama (Local/Self-hosted)](#option-2-using-ollama-localself-hosted)
   - [Extract Kindle Book](#extract-kindle-book)
   - [Transcribe Book Content](#transcribe-book-content)
+  - [(Optional) Validate and Clean Content](#optional-validate-and-clean-content)
   - [(Optional) Export Book as PDF](#optional-export-book-as-pdf)
   - [(Optional) Export Book as EPUB](#optional-export-book-as-epub)
   - [(Optional) Export Book as Markdown](#optional-export-book-as-markdown)
@@ -154,10 +157,11 @@ Make sure you have `node >= 18` and [pnpm](https://pnpm.io) installed.
 3. Set up environment variables ([details](#setup-env-vars))
 4. Run `src/extract-kindle-book.ts` ([details](#extract-kindle-book))
 5. Run `src/transcribe-book-content.ts` ([details](#transcribe-book-content))
-6. (Optional) Run `src/export-book-pdf.ts` ([details](#optional-export-book-as-pdf))
-7. (Optional) Export book as EPUB ([details](#optional-export-book-as-epub))
-8. (Optional) Run `src/export-book-markdown.ts` ([details](#optional-export-book-as-markdown))
-9. (Optional) Run `src/export-book-audio.ts` ([details](#optional-export-book-as-ai-narrated-audiobook-))
+6. (Optional) Validate and clean transcribed content ([details](#optional-validate-and-clean-content))
+7. (Optional) Run `src/export-book-pdf.ts` ([details](#optional-export-book-as-pdf))
+8. (Optional) Export book as EPUB ([details](#optional-export-book-as-epub))
+9. (Optional) Run `src/export-book-markdown.ts` ([details](#optional-export-book-as-markdown))
+10. (Optional) Run `src/export-book-audio.ts` ([details](#optional-export-book-as-ai-narrated-audiobook-))
 
 ### Setup Env Vars
 
@@ -183,19 +187,25 @@ ASIN=
 
 AI_PROVIDER=ollama
 OLLAMA_BASE_URL=http://localhost:11434
-# Vision model for OCR - must support vision! Examples: llava, llava:13b, llama3.2-vision
-OLLAMA_VISION_MODEL=llava
-# Optional text model for other tasks
-OLLAMA_TEXT_MODEL=deepseek-v2:16b
+# Vision model for OCR - must support vision!
+OLLAMA_VISION_MODEL=qwen2.5vl:7b
+# Concurrency: number of images to process in parallel (1-16, default: 16)
+# Lower values (1-4) for large models or unstable servers, higher values (12-16) for smaller/faster models
+OLLAMA_CONCURRENCY=16
 ```
 
 **Important:** When using Ollama, you must use a **vision-capable model** like:
-- `qwen2.5-vl:32b` (recommended - excellent OCR accuracy)
-- `llava` (or `llava:7b`, `llava:13b`, `llava:34b`)
-- `llama3.2-vision`
-- `minicpm-v`
-- `moondream`
+- `qwen2.5vl:7b` ⭐ **RECOMMENDED** - Best OCR accuracy (~99% success rate)
+- `llama3.2-vision:latest` (11B) - Good alternative but can struggle with certain content
+- `llava:13b` or `llava:34b` - Decent but lower quality than qwen2.5vl
+- `minicpm-v` - Experimental
 
+**Model Recommendations:**
+
+- For speed on powerful hardware: Use `qwen2.5vl:7b` with concurrency 12-16
+- For best quality: Use `qwen2.5vl:32b` with concurrency 4-8
+- For stability: Set `OLLAMA_CONCURRENCY=1` to process one page at a time
+- For regular use: Set `OLLAMA_CONCURRENCY=4-8`
 Regular text-only models like `deepseek-v2`, `llama3`, etc. will **not work** for the transcription step since they can't process images.
 
 You can find your book's [ASIN](https://en.wikipedia.org/wiki/Amazon_Standard_Identification_Number) (Amazon ID) by visiting [read.amazon.com](https://read.amazon.com) and clicking on the book you want to export. The resulting URL will look like `https://read.amazon.com/?asin=B0819W19WD&ref_=kwl_kr_iv_rec_2`, with `B0819W19WD` being the ASIN in this case.
@@ -229,10 +239,51 @@ npx tsx src/transcribe-book-content.ts
 ```
 
 - _(This takes a few minutes to run)_
-- This takes each of the page screenshots and runs them through a vLLM (`gpt-4o` or `gpt-4o-mini`) to extract the raw text content from each page of the book.
+- This takes each of the page screenshots and runs them through a vLLM (`gpt-4o`, `gpt-4o-mini`, or Ollama vision model) to extract the raw text content from each page of the book.
 - It then stitches these text chunks together, taking into account chapter boundaries.
 - The result is stored as JSON to `out/${asin}/content.json`.
 - Example: [examples/B0819W19WD/content.json](./examples/B0819W19WD/content.json)
+
+### (Optional) Validate and Clean Content
+
+After transcription, you can validate and clean the OCR'd content to fix common errors:
+
+```sh
+# Step 1: Validate content and generate a report
+npx tsx src/validate-content.ts
+
+# Step 2: Clean duplicate words/lines and truncate repetitions
+npx tsx src/clean-content.ts
+
+# Step 3: Reindex pages to have sequential page numbers
+npx tsx src/reindex-content.ts
+```
+
+**What these scripts do:**
+
+- **validate-content.ts**: Scans `content.json` for common OCR errors:
+  - Repetitive sentences (model looping)
+  - Duplicate consecutive lines or words
+  - Excessive punctuation (dashes, ellipsis)
+  - Unusually short or long pages
+  - Generates a detailed report at `out/${asin}/validation-report.json`
+
+- **clean-content.ts**: Automatically fixes issues:
+  - Removes WebNovel ad pages
+  - Removes duplicate consecutive words (e.g., "the the" → "the")
+  - Removes duplicate consecutive lines
+  - Truncates pages with repetitive sentence patterns
+  - Creates backup at `out/${asin}/content.backup.json`
+
+- **reindex-content.ts**: Renumbers pages sequentially:
+  - Fixes index field (0, 1, 2, 3...)
+  - Fixes page field (1, 2, 3, 4...)
+  - Useful after removing ad pages or duplicate content
+
+**When to use:**
+- Always validate after transcription to check quality
+- Clean if using Ollama models (especially 7B models which can have repetition issues)
+- Reindex after cleaning to ensure sequential page numbering
 
 ### (Optional) Export Book as PDF
 
