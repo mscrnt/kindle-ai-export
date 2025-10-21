@@ -163,13 +163,40 @@ Make sure you have `node >= 18` and [pnpm](https://pnpm.io) installed.
 
 Set up these required environment variables in a local `.env`:
 
+#### Option 1: Using OpenAI (Default)
+
 ```sh
 AMAZON_EMAIL=
 AMAZON_PASSWORD=
 ASIN=
 
+AI_PROVIDER=openai
 OPENAI_API_KEY=
 ```
+
+#### Option 2: Using Ollama (Local/Self-hosted)
+
+```sh
+AMAZON_EMAIL=
+AMAZON_PASSWORD=
+ASIN=
+
+AI_PROVIDER=ollama
+OLLAMA_BASE_URL=http://localhost:11434
+# Vision model for OCR - must support vision! Examples: llava, llava:13b, llama3.2-vision
+OLLAMA_VISION_MODEL=llava
+# Optional text model for other tasks
+OLLAMA_TEXT_MODEL=deepseek-v2:16b
+```
+
+**Important:** When using Ollama, you must use a **vision-capable model** like:
+- `qwen2.5-vl:32b` (recommended - excellent OCR accuracy)
+- `llava` (or `llava:7b`, `llava:13b`, `llava:34b`)
+- `llama3.2-vision`
+- `minicpm-v`
+- `moondream`
+
+Regular text-only models like `deepseek-v2`, `llama3`, etc. will **not work** for the transcription step since they can't process images.
 
 You can find your book's [ASIN](https://en.wikipedia.org/wiki/Amazon_Standard_Identification_Number) (Amazon ID) by visiting [read.amazon.com](https://read.amazon.com) and clicking on the book you want to export. The resulting URL will look like `https://read.amazon.com/?asin=B0819W19WD&ref_=kwl_kr_iv_rec_2`, with `B0819W19WD` being the ASIN in this case.
 

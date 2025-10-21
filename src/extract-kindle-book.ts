@@ -46,9 +46,6 @@ async function main() {
 
   const context = await chromium.launchPersistentContext(userDataDir, {
     headless: false,
-    channel: 'chrome',
-    executablePath:
-      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
     args: ['--hide-crash-restore-bubble'],
     ignoreDefaultArgs: ['--enable-automation'],
     deviceScaleFactor: 2,
@@ -109,11 +106,17 @@ async function main() {
       // Only enter 2-factor auth code if needed
       if (code) {
         await page.locator('input[type="tel"]').fill(code)
-        await page
-          .locator(
-            'input[type="submit"][aria-labelledby="cvf-submit-otp-button-announce"]'
-          )
-          .click()
+
+        // Try multiple possible selectors for the submit button
+        const submitButton = page.locator(
+          'input[type="submit"][aria-labelledby="cvf-submit-otp-button-announce"], ' +
+          'input[type="submit"]#cvf-submit-otp-button, ' +
+          'input[type="submit"][name="cvf-submit-otp-button"], ' +
+          'button[type="submit"], ' +
+          'input[type="submit"]'
+        ).first()
+
+        await submitButton.click()
       }
     }
 
@@ -130,21 +133,38 @@ async function main() {
   // await page.waitForURL('**/signin')
 
   async function updateSettings() {
-    await page.locator('ion-button[title="Reader settings"]').click()
-    await delay(1000)
+    // Wait for the settings button to be available - try multiple possible selectors
+    console.log('Looking for Reader settings button...')
+    const settingsButton = page.locator(
+      'ion-button[title="Reader settings"], ' +
+      'button[aria-label="Reader settings"], ' +
+      '[title="Font and page settings"], ' +
+      'ion-button:has-text("Aa")'
+    ).first()
+
+    await settingsButton.waitFor({ timeout: 60000 })
+    console.log('Clicking Reader settings...')
+    await settingsButton.click()
+    await delay(2000)
 
     // Change font to Amazon Ember
+    console.log('Changing font to Amazon Ember...')
     await page.locator('#AmazonEmber').click()
+    await delay(500)
 
     // Change layout to single column
+    console.log('Changing to single column layout...')
     await page
       .locator('[role="radiogroup"][aria-label$=" columns"]', {
         hasText: 'Single Column'
       })
       .click()
+    await delay(500)
 
-    await page.locator('ion-button[title="Reader settings"]').click()
-    await delay(1000)
+    // Close settings
+    console.log('Closing settings...')
+    await settingsButton.click()
+    await delay(2000)
   }
 
   async function goToPage(pageNumber: number) {
@@ -188,14 +208,44 @@ async function main() {
     }
   }
 
+  // Wait for the book reader to fully load
+  console.log('Waiting for book reader to load...')
+  await page.waitForSelector(krRendererMainImageSelector, { timeout: 60000 }).catch(() => {
+    console.log('Main reader content may not have loaded, continuing anyway...')
+  })
+  await delay(3000) // Give the UI time to settle
+
   await dismissPossibleAlert()
   await ensureFixedHeaderUI()
-  await updateSettings()
 
+  console.log('Updating reader settings...')
+  try {
+    await updateSettings()
+    console.log('Settings updated successfully')
+  } catch (err) {
+    console.warn('Failed to update settings, continuing anyway:', (err as Error).message)
+  }
+
+  console.log('Getting initial page navigation...')
   const initialPageNav = await getPageNav()
+  console.log('Initial page nav:', initialPageNav)
 
-  await page.locator('ion-button[title="Table of Contents"]').click()
-  await delay(1000)
+  console.log('Opening Table of Contents...')
+
+  // Make sure the header is visible first
+  await page.locator('#reader-header').hover({ force: true })
+  await delay(500)
+
+  const tocButton = page.locator(
+    'ion-button[aria-label="Table of Contents"], ' +
+    'ion-button[item-i-d="top_menu_table_of_contents"], ' +
+    'ion-button[title="Table of Contents"]'
+  ).first()
+
+  await tocButton.waitFor({ timeout: 30000 })
+  console.log('Found TOC button, clicking...')
+  await tocButton.click({ force: true })
+  await delay(2000)
 
   const $tocItems = await page.locator('ion-list ion-item').all()
   const tocItems: Array<TocItem> = []
@@ -254,6 +304,8 @@ async function main() {
     `reading ${totalContentPages} pages${total > totalContentPages ? ` (of ${total} total pages stopping at "${parsedToc.afterLastPageTocItem!.title}")` : ''}...`
   )
 
+  let shouldStopExtraction = false
+
   do {
     const pageNav = await getPageNav()
     if (pageNav?.page === undefined) {
@@ -294,11 +346,12 @@ async function main() {
     // the screenshot changing the DOM temporarily and not being stable yet.
     await delay(100)
 
-    if (pageNav.page > totalContentPages) {
+    if (pageNav.page >= totalContentPages) {
       break
     }
 
     let retries = 0
+    const maxRetries = 50
 
     // Occasionally the next page button doesn't work, so ensure that the main
     // image src actually changes before continuing.
@@ -324,9 +377,10 @@ async function main() {
       } catch (err: any) {
         // No next page to navigate to
         console.warn(
-          'unable to navigate to next page; breaking...',
+          'Next page button not found. Stopping extraction.',
           err.message
         )
+        shouldStopExtraction = true
         break
       }
 
@@ -344,7 +398,18 @@ async function main() {
       await delay(100)
 
       ++retries
+
+      if (retries >= maxRetries) {
+        console.warn(`Max retries (${maxRetries}) reached. Page is not changing. Stopping extraction.`)
+        shouldStopExtraction = true
+        break
+      }
     } while (true)
+
+    if (shouldStopExtraction) {
+      console.log(`\nExtraction stopped at page ${pageNav.page}. Total pages captured: ${pages.length}`)
+      break
+    }
   } while (true)
 
   const result: BookMetadata = { info: info!, meta: meta!, toc, pages }
@@ -354,14 +419,10 @@ async function main() {
   )
   console.log(JSON.stringify(result, null, 2))
 
-  if (initialPageNav?.page !== undefined) {
-    console.warn(`resetting back to initial page ${initialPageNav.page}...`)
-    // Reset back to the initial page
-    await goToPage(initialPageNav.page)
-  }
-
+  console.log('Extraction complete! Closing browser...')
   await page.close()
   await context.close()
+  console.log('Browser closed. Script finished.')
 }
 
 function parsePageNav(text: string | null): PageNav | undefined {
