@@ -36,6 +36,7 @@
     "pdfkit": "^0.15.0",
     "playwright": "^1.48.0",
     "playwright-core": "^1.48.0",
+    "tesseract.js": "^6.0.1",
     "unrealspeech-api": "^1.0.2"
   },
   "devDependencies": {
